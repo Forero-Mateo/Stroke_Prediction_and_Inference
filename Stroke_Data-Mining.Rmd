@@ -1,0 +1,868 @@
+---
+title: "CIS 575 Project"
+author: "Mateo Forero"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Import all necessary libraries
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(rmarkdown)
+library(gridExtra)
+library(mice)
+library(caret)
+library(MLmetrics)
+library(MASS)
+library(fastDummies)
+library(tidymodels)
+library(MLeval)
+library(themis)
+library(doParallel)
+```
+
+# Processing Data
+
+First step is to load the data set we are planning to use and investigate some of its properties. Additionally the ID column is being dropped and the natural index of the tibble will be used. The decision is being made to only work with adults. The data set has 856 cases where the patient is below the age of 18 and of those cases only 2 have had a stroke (0.23%). The rate of stroke in children is much lower than those in adults (estimated as 4.6 per 100,000 children), and is commonly associated with risk factors not captured in this data set (e.g genetic conditions). This will allow for a more focused study.  
+
+
+
+```{r,message=FALSE}
+raw_data <- read_csv("healthcare-dataset-stroke-data.csv",show_col_types = FALSE)
+raw_data <- dplyr::select(raw_data,-c(id))
+adult_data <- filter(raw_data, age >= 18)
+```
+
+A quick look at the data shows BMI as a character variable, so it will be converted to numeric and the rest of the character and binary variables  will be converted to factors. Imputation will be used against all the null values in the data set later.
+```{r}
+adult_data$bmi <- as.numeric(adult_data$bmi)
+adult_data$hypertension <- as.factor(adult_data$hypertension)
+adult_data$heart_disease <- as.factor(adult_data$heart_disease)
+adult_data$stroke <- as.factor(adult_data$stroke)
+adult_data <-adult_data %>% mutate_if(is.character,as.factor)
+
+head(adult_data)
+```
+
+
+Quick summary of stats show: 11.7% have hypertension, 6.46% have heart disease, and our response variable is only positive for 5.81% of out data. The average glucose level has a positive skew causing the mean to be larger than our median.
+```{r}
+summary(adult_data)
+```
+
+Our only numeric column with missing values is BMI. Approximately 4.25% of the cases are missing BMI values. Additionally we have 1 'Other' under gender and 862 'Unknown' under smoking_status. To simplify the model we will assume gender is categorizing biological sex and will assign the "Other" to Female which is the most common gender in our data set. I'll treat the 'Unknown' as a valid category of smoking_status. Under work_type we have 5 'Never_worked' which comprises of 0.12% of the total cases so they will be changed to Private. These were more prevalent when children were still being considered in our model.   
+
+
+We will be utilizing cross-validation, and imputation of BMI will be applied for each fold to prevent data leakage. Data leakage is assumed to be negligible for the Gender and Work Type variable changes since they constitute such a small number of cases changed. 
+
+```{r}
+adult_data$gender[which(adult_data$gender == "Other")] <- "Female"
+adult_data$gender <- factor(adult_data$gender)
+adult_data$work_type[which(adult_data$work_type == 'Never_worked')] <- "Private"
+adult_data$work_type <- factor(adult_data$work_type)
+```
+
+# Visualizing the data
+We will break our data into groups we care to analyze further with graphs
+```{r}
+ht_data <- adult_data[which(adult_data$hypertension == 1),]
+no_ht_data <- adult_data[which(adult_data$hypertension == 0),]
+hd_data <- adult_data[which(adult_data$heart_disease == 1),]
+no_hd_data <- adult_data[which(adult_data$heart_disease == 0),]
+```
+
+The first set of graphs will investigate how big of an influence hypertension is on having a stroke. Because only 11.7% of the cases have hypertension we will graph these separately. We also separate genders to see if there is a major difference. This same exercise will be performed on heart disease.
+```{r, echo=FALSE}
+hyper_plot <- ggplot(ht_data, aes(x= stroke, group = gender)) + 
+  geom_bar(aes(y = ..prop.., fill = gender), stat="count", width = .6, position = position_dodge(.63)) +
+  geom_text(aes( label = scales::percent(..prop..),
+                 y= ..prop.. ), stat= "count", vjust = -.3, size = 3.5, position = position_dodge(.63) ) +
+  scale_y_continuous(labels = scales::percent, limits = c(0,1.05)) +
+  ggtitle("With Hypertension") + xlab("Stroke") + ylab("Percent") + 
+  scale_fill_discrete(name = "Gender", labels = c("Female", "Male")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+nohyper_plot <- ggplot(no_ht_data, aes(x= stroke, group = gender)) + 
+  geom_bar(aes(y = ..prop.., fill = gender), stat="count", width = .6, position = position_dodge(.63)) +
+  geom_text(aes( label = scales::percent(..prop..),
+                 y= ..prop.. ), stat= "count", vjust = -.2, size = 3.5, position = position_dodge(.63)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0,1.05)) +
+  ggtitle("Without Hypertension") + xlab("Stroke") + ylab("Percent") + 
+  scale_fill_discrete(name = "Gender", labels = c("Female", "Male")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+```{r,fig.height= 5, width = 3}
+grid.arrange(nohyper_plot, hyper_plot)
+```
+
+
+```{r, echo=FALSE}
+heartd_plot <- ggplot(hd_data, aes(x= stroke, group = gender)) + 
+  geom_bar(aes(y = ..prop.., fill = gender), stat="count", width = .6,position = position_dodge(.63)) +
+  geom_text(aes( label = scales::percent(..prop..),
+                 y= ..prop.. ), stat= "count", vjust = -.3, size = 3.5, position = position_dodge(.63)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0,1.05)) +
+  ggtitle("With Heart Disease") + xlab("Stroke") + ylab("Percent") +
+  scale_fill_discrete(name = "Gender", labels = c("Female", "Male")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+noheartd_plot <- ggplot(no_hd_data, aes(x= stroke, group = gender)) + 
+  geom_bar(aes(y = ..prop.., fill = gender), stat="count", width = .6,position = position_dodge(.63)) +
+  geom_text(aes( label = scales::percent(..prop..),
+                 y= ..prop.. ), stat= "count", vjust = -.2, size = 3.5,position = position_dodge(.63)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0,1.05)) +
+  ggtitle("Without Heart Disease") + xlab("Stroke") + ylab("Percent") +
+  scale_fill_discrete(name = "Gender", labels = c("Female", "Male")) +
+  theme(plot.title = element_text(hjust = 0.5))
+  
+```
+
+
+```{r,fig.height= 5, width = 3}
+grid.arrange(noheartd_plot,heartd_plot)
+```
+
+
+```{r, echo=FALSE}
+age_plot <- ggplot(adult_data, aes(x=stroke, y=age,fill = gender)) + 
+  geom_boxplot(width = .6,position = position_dodge(.8)) + 
+  ggtitle("Age vs Stroke") + xlab("Stroke") + ylab("Age") +
+  scale_fill_discrete(name = "Gender", labels = c("Female", "Male")) +
+  theme(plot.title = element_text(hjust = 0.5,size = 10))
+
+gluc_plot <- ggplot(adult_data, aes(x=stroke, y=log(avg_glucose_level),fill = gender)) + 
+  geom_boxplot(width = .6,position = position_dodge(.8)) + 
+  ggtitle("Scaled\n Glucose Level vs Stroke") + xlab("Stroke") + ylab("Log Scaled AGL") +
+  scale_fill_discrete(name = "Gender", labels = c("Female", "Male")) +
+  theme(plot.title = element_text(hjust = 0.5,size = 10))
+
+bmi_plot <- ggplot(adult_data, aes(x=stroke, y=log(bmi),fill = gender)) + 
+  geom_boxplot(width = .6,position = position_dodge(.8)) + 
+  ggtitle("Scaled BMI vs Stroke") + xlab("Stroke") + ylab("Log Scaled BMI") +
+  scale_fill_discrete(name = "Gender", labels = c("Female", "Male")) +
+  theme(plot.title = element_text(hjust = 0.5,size = 10))
+```
+
+```{r,fig.width= 8, fig.height=8}
+grid.arrange(age_plot,gluc_plot,bmi_plot,ncol = 2,nrow = 2)
+```
+
+Next we will look at whether we see a difference in the categorical values and their average rate of stroke.
+```{r, echo=FALSE}
+pie_res_type <- adult_data %>% 
+  group_by(Residence_type) %>% 
+  summarise(avg = mean(as.numeric(stroke) - 1)) %>%
+  mutate(perc = scales::percent(avg / sum(avg)))
+  
+
+pie_work_type <- adult_data %>%
+  group_by(work_type) %>%
+  summarise(avg = mean(as.numeric(stroke) - 1)) %>%
+  mutate(perc = scales::percent(avg / sum(avg)))
+
+
+pie_smoke_type <- adult_data %>%
+  group_by(smoking_status) %>%
+  summarise(avg = mean(as.numeric(stroke) - 1)) %>%
+  mutate(perc = scales::percent(avg / sum(avg)))
+
+pie_married_type <- adult_data %>%
+  group_by(ever_married) %>%
+  summarise(avg = mean(as.numeric(stroke) - 1)) %>%
+  mutate(perc = scales::percent(avg / sum(avg)))
+
+```
+
+```{r, echo=FALSE}
+work_pie <- ggplot(pie_work_type, aes(x = "", y = avg, fill = work_type)) +
+  geom_col() +
+  geom_text(aes(label = perc),
+             position = position_stack(vjust = 0.5),
+             size = 3) +
+  coord_polar(theta = "y") +
+  ggtitle("Stroke per Work Type") + xlab("") + ylab("") +
+  scale_fill_discrete(name = "Work Type", labels = c("Government Job",
+                                                     "Private",
+                                                     "Self-Employed")) +
+  theme_void() +
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 6),
+        legend.key.size = unit(.2, 'cm'))
+
+res_pie <- ggplot(pie_res_type, aes(x = "", y = avg, fill = Residence_type)) +
+  geom_col() +
+  geom_text(aes(label = perc),
+             position = position_stack(vjust = 0.5),
+             size = 3) +
+  coord_polar(theta = "y") +
+  ggtitle("Stroke per Residence Type") + xlab("") + ylab("") +
+  scale_fill_discrete(name = "Residence Type") +
+  theme_void() +
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 6),
+        legend.key.size = unit(.2, 'cm'))
+
+smoke_pie <- ggplot(pie_smoke_type, aes(x = "", y = avg, fill = smoking_status)) +
+  geom_col() +
+  geom_text(aes(label = perc),
+             position = position_stack(vjust = 0.5),
+             size = 2.5) +
+  coord_polar(theta = "y") +
+  ggtitle("Stroke per Smoking Status") + xlab("") + ylab("") +
+  scale_fill_discrete(name = "Smoking Status", labels = c("Former Smoker",
+                                                     "Never Smoked",
+                                                     "Active Smoker",
+                                                     "Unknown Status")) +
+  theme_void() +
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 6),
+        legend.key.size = unit(.2, 'cm'))
+  
+married_pie <- ggplot(pie_married_type, aes(x = "", y = avg, fill = ever_married)) +
+  geom_col() +
+  geom_text(aes(label = perc),
+             position = position_stack(vjust = 0.5),
+             size = 2.5) +
+  coord_polar(theta = "y") +
+  ggtitle("Stroke per Married") + xlab("") + ylab("") +
+  scale_fill_discrete(name = "Married", labels = c("Never Married",
+                                                     "Married")) +
+  theme_void() +
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        legend.title = element_text(size = 6),
+        legend.text = element_text(size = 6),
+        legend.key.size = unit(.2, 'cm'))
+```
+
+```{r,fig.width= 7, fig.height=5}
+grid.arrange(work_pie, res_pie, smoke_pie, married_pie,nrow = 2, ncol = 2)
+```
+
+# Model Pre-Processing
+
+As this point we have all the visual inference about our data and how it relates to the response variable. Although we will tune our models individually, to write efficient code we will automate our data pre-processing so we can train and test our models with ease. 
+
+I chose to impute our missing BMI values using a random forest imputation method. This method performs very well when the variable being imputed is normally distributed.  As an example, the density plot of the predicted values vs the original data set is included. The mean of the 5 simulations are used to give a value to our new data set. 
+
+```{r}
+mice_result <- mice(adult_data,method = 'rf',seed = 575)
+complete_data <- complete(mice_result)
+densityplot(mice_result)
+```
+
+I'll now create dummy variables to represent the categorical data to preform a smote procedure later in our cross validation. Additionally the data will be split 85/15 used stratified indexing to have a test set to determine final model potential.
+```{r}
+set.seed(575)
+dummy_data <- dummy_cols(complete_data,
+                    select_columns = c("gender",
+                                       "hypertension",
+                                       "heart_disease",
+                                       'ever_married',
+                                       'work_type',
+                                       "Residence_type",
+                                       "smoking_status"),
+                    remove_first_dummy = TRUE,
+                    remove_selected_columns = TRUE)
+
+dummy_data$stroke <- recode_factor(dummy_data$stroke, "0" = "No_Stroke", "1" = "Stroke")
+
+trainIndex <- createDataPartition(dummy_data$stroke, p = .85,
+                                  list = FALSE,
+                                  times = 1)
+dummy_data <- dummy_data[ trainIndex,]
+test_data <- dummy_data[-trainIndex,]
+
+```
+
+
+## Model 1: Logistic Regression using a Step AIC algorithm to find the best variables to use. A prelimiary model using the entire dataset will be used to determine which predictors are statistically relevant to our response then CV will be done with the chosen parameters. 
+
+```{r}
+smote_log_model_1 <- recipe(stroke~., data = dummy_data, seed = 575) %>%
+  step_smote(stroke) %>%
+  prep()
+
+log_param <- glm(stroke~.,family = binomial(link = logit),data = smote_log_model_1$template)
+
+step.model <- stepAIC(log_param,direction = 'both',trace = FALSE)
+summary(step.model)
+```
+
+
+To avoid dropping partial categories, the factors for work type and smoker status will be combined. Work type will now have 2 levels to describe someone who is self employed vs works for another entity. Smoking will be broken up into 3 groups, was/is a smoker, never smoked, or unknown.  
+```{r}
+logistic_complete <- complete(mice_result)
+logistic_complete$work_type <- fct_collapse(complete_data$work_type,
+                                        GP = c("Private","Govt_job"),
+                                        self_employed = 'Self-employed')
+logistic_complete$smoking_status <- fct_collapse(complete_data$smoking_status,
+                                        smoked = c("formerly smoked","smokes"),
+                                        never_smoked = 'never smoked')
+
+
+log_dummy <- dummy_cols(logistic_complete,
+                    select_columns = c("gender",
+                                       "hypertension",
+                                       "heart_disease",
+                                       'ever_married',
+                                       'work_type',
+                                       "Residence_type",
+                                       "smoking_status"),
+                    remove_first_dummy = TRUE,
+                    remove_selected_columns = TRUE)
+
+log_dummy$stroke <- recode_factor(log_dummy$stroke, "0" = "No_Stroke", "1" = "Stroke")
+
+```
+
+A second iteration to check for statistically significant parameters will be done.  
+```{r}
+smote_log_model_2 <- recipe(stroke~., data = log_dummy, seed = 575) %>%
+  step_smote(stroke) %>%
+  prep()
+
+log_param <- glm(stroke~.,family = binomial(link = logit),data = smote_log_model_2$template)
+
+step.model <- stepAIC(log_param,direction = 'both',trace = FALSE)
+summary(step.model)
+```
+
+This will control how I train my models. I intend to CV with 10 folds. They will all be centered and scaled and SMOTE will be used to balance the response variables in each split, thus preventing data leakage. 
+```{r}
+tc_log <- trainControl(method = 'cv',
+                   number = 10,
+                   savePredictions = TRUE,
+                   classProbs = TRUE,
+                   sampling = 'smote',
+                   )
+```
+
+CV with smote sampling will be run with 10 folds. The Logistic formula found in the previous step will be used.
+```{r}
+set.seed(575)
+t <- Sys.time()
+
+Logistic_model <- train(stroke ~.,
+               data = log_dummy,
+               trControl = tc_log,
+               method = 'glmStepAIC',
+               family = "binomial",
+               trace = FALSE,
+               metric = 'Kappa'
+               )
+
+Sys.time() - t
+```
+This is our final Logistic Model. Metrics will be discussed in the next section
+```{r}
+summary(Logistic_model$finalModel)
+confusionMatrix(Logistic_model,'none')
+```
+
+
+## Model 2: Random Forest Classifier.  
+
+To simplify the remaining model creations and keep them all consistent, the work and smoking factor collapse will be performed on the adult dataset
+
+```{r}
+complete_data <- complete(mice_result)
+complete_data$work_type <- fct_collapse(complete_data$work_type,
+                                        GP = c("Private","Govt_job"),
+                                        self_employed = 'Self-employed')
+complete_data$smoking_status <- fct_collapse(complete_data$smoking_status,
+                                        smoked = c("formerly smoked","smokes"),
+                                        never_smoked = 'never smoked')
+
+set.seed(575)
+dummy_data <- dummy_cols(complete_data,
+                    select_columns = c("gender",
+                                       "hypertension",
+                                       "heart_disease",
+                                       'ever_married',
+                                       'work_type',
+                                       "Residence_type",
+                                       "smoking_status"),
+                    remove_first_dummy = TRUE,
+                    remove_selected_columns = TRUE)
+
+dummy_data$stroke <- recode_factor(dummy_data$stroke, "0" = "No_Stroke", "1" = "Stroke")
+
+trainIndex <- createDataPartition(dummy_data$stroke, p = .85,
+                                  list = FALSE,
+                                  times = 1)
+dummy_data <- dummy_data[ trainIndex,]
+test_data <- dummy_data[-trainIndex,]
+
+```
+
+
+RF does not need scaling of parameters so it was removed. I will tune on number of random parameters to use ('mtry'). Parallel computing is being utilized to speed up computation time.
+```{r}
+
+tc_rf1 <- trainControl(method = 'cv',
+                   number = 10,
+                   sampling = 'smote',
+                   search = 'grid',
+                   allowParallel = T,
+                   )
+registerDoParallel(detectCores()-2)
+
+tuneGrid1 <- expand.grid(.mtry = c(1,3,5,7,9))
+```
+
+```{r}
+t <- Sys.time()
+set.seed(575)
+RF_model1 <- train(stroke ~.,
+               data = dummy_data,
+               trControl = tc_rf1,
+               importance = TRUE,
+               method = 'rf',
+               tuneGrid = tuneGrid1,
+               ntree = 1000,
+               metric = 'Kappa'
+               )
+
+Sys.time() - t
+```
+A model using the best hyper parameter (mtry =1) is build and run through cv. This model will be used for metrics in the next section. 
+```{r}
+
+tc_rf2 <- trainControl(method = 'cv',
+                   number = 10,
+                   savePredictions = 'final',
+                   classProbs = TRUE,
+                   sampling = 'smote',
+                   search = 'grid',
+                   allowParallel = T,
+                   summaryFunction = prSummary
+                   )
+
+tuneGrid2 <- expand.grid(.mtry = c(1))
+
+```
+
+```{r}
+t <- Sys.time()
+set.seed(575)
+RF_model2 <- train(stroke ~.,
+               data = dummy_data,
+               trControl = tc_rf2,
+               importance = TRUE,
+               method = 'rf',
+               tuneGrid = tuneGrid2,
+               ntree = 1000,
+               metric = 'AUC'
+               )
+
+Sys.time() - t
+```
+
+```{r}
+RF_model2$results
+```
+
+
+
+This is our final RF. Metrics will be discussed in the next section
+```{r}
+RF_model2$finalModel$confusion
+```
+
+## Model 3: Gradient Boosting  
+
+Gradient boosting will now be used
+```{r}
+boost_grid <- expand.grid(n.trees = c(1000,2000),
+                          interaction.depth=c(1:5),
+                          shrinkage=seq(0.005,01,length.out = 10), n.minobsinnode=c(10))
+
+tc_boost <- trainControl(method = 'cv',
+                   number = 5,
+                   savePredictions = TRUE,
+                   classProbs = TRUE,
+                   sampling = 'smote',
+                   search = 'grid',
+                   allowParallel = T 
+                   )
+```
+
+Model Training
+```{r}
+t <- Sys.time()
+set.seed(575)
+GB_Model <- train(stroke~.,data = dummy_data,
+                  method = "gbm",
+                  metric = 'Kappa',
+                  trControl = tc_boost,
+                  verbose = FALSE,
+                  tuneGrid = boost_grid)
+Sys.time() - t
+```
+```{r}
+
+grid.table(round(head(GB_Model$results[order(GB_Model$results$Kappa,decreasing = TRUE),]),3))
+
+```
+
+A final GB model will be created using the best tuning
+
+```{r}
+boost_grid2 <- expand.grid(n.trees = c(2000),
+                          interaction.depth=c(1),
+                          shrinkage= c(0.005), n.minobsinnode=c(10))
+
+tc_boost2 <- trainControl(method = 'cv',
+                   number = 10,
+                   savePredictions = 'final',
+                   classProbs = TRUE,
+                   sampling = 'smote',
+                   search = 'grid',
+                   allowParallel = T 
+                   )
+```
+
+Model Training
+```{r}
+t <- Sys.time()
+set.seed(575)
+GB_Model2 <- train(stroke~.,data = dummy_data,
+                  method = "gbm",
+                  metric = 'Kappa',
+                  trControl = tc_boost2,
+                  verbose = FALSE,
+                  tuneGrid = boost_grid2)
+Sys.time() - t
+```
+
+
+```{r}
+summary(GB_Model2$finalModel)
+confusionMatrix(GB_Model2,'none')
+
+```
+
+
+```{r}
+boost_Metrics <- evalm(GB_Model2,optimise = 'F1',showplots = FALSE)
+boost_Metrics$stdres
+```
+
+
+# Metrics and Model Selection
+
+
+This Function will determine what the best threshold for the models are when optimized by the F-Beta_Measure. In this particular case, I am most interested in F-2_Measure to add more important to recall to avoid false negative as much as possible. 
+```{r}
+Fb_thresh <- function(model, Beta=1){
+  prob_true <- model$pred$Stroke
+  observed <- model$pred$obs
+  thrs  <- seq(0.05,.95,length.out = 200)
+  fb_measure <- rep(0,200)
+  thrs_f_table <- data.frame(thrs,fb_measure)
+  
+  for(i in 1:length(fb_measure)){
+    pred_X <- ifelse(prob_true >= thrs[i],"Stroke", "No_Stroke")
+    
+    thrs_f_table[i,2] <- FBeta_Score(observed, pred_X,
+                                     beta = Beta,
+                                     positive = "Stroke")
+  }
+  thrs_f_table[is.na(thrs_f_table)] <- 0
+  max_thresh <- thrs_f_table[which(max(thrs_f_table$fb_measure) == thrs_f_table$fb_measure), ] 
+  
+  Return_list <- list(max_thresh,thrs_f_table)
+  return(Return_list)
+}
+
+```
+
+
+The function returns the best threshold and a data frame of all the points tested. In particular the cross validation models are used to determine the best threshold to use
+
+
+This will adjust our stroke probability using the "Population rate" seen in our data set. 
+```{r}
+prob_fix <- function(x){
+  y <- (x*(0.058063/0.5))/(x*(0.058063/0.5) +
+       (1-x)*((1-0.058063)/0.5))
+  return(y)
+}
+
+```
+
+```{r}
+Log_thres <- Fb_thresh(Logistic_model,2)
+RF_thres <- Fb_thresh(RF_model2,2)
+GB_thres <- Fb_thresh(GB_Model2,2)
+
+Model_thres <- data.frame(Log_thres[[2]][1],
+                          Log_thres[[2]][2],
+                          RF_thres[[2]][2],
+                          GB_thres[[2]][2])
+
+names(Model_thres)[1] <- "Threshold"
+names(Model_thres)[2] <- "Log_F2_Score"
+names(Model_thres)[3] <- "RF_F2_Score" 
+names(Model_thres)[4] <- "GB_F2_Score"
+
+
+ggplot(data = Model_thres) +
+  geom_line(mapping = aes(x = Threshold, y = Log_F2_Score,
+                             color = "Log_F2_Score"), lwd = 1.5) +
+  geom_point(data = Log_thres[[1]],aes(x = thrs, y = fb_measure)) +
+  geom_segment(data = Log_thres[[1]],
+               aes(x = thrs, xend = thrs, y = fb_measure, yend = 0),
+               linetype = "dashed",lwd = 1) +
+  geom_text(data = Log_thres[[1]],
+            aes(x = thrs, y = fb_measure, label = round(thrs,3)),
+            vjust = -1, hjust = 1) +
+  geom_text(data = Log_thres[[1]],
+            aes(x = thrs, y = fb_measure, label = round(fb_measure,3)),
+            vjust = -1, hjust = -0.2) +
+  geom_line(mapping = aes(x = Threshold, y = RF_F2_Score,
+                             color = "RF_F2_Score"), lwd = 1.5) +
+  geom_point(data = RF_thres[[1]],aes(x = thrs, y = fb_measure)) +
+  geom_segment(data = RF_thres[[1]],
+               aes(x = thrs, xend = thrs, y = fb_measure, yend = 0),
+               linetype = "dashed",lwd = 1) +
+  geom_text(data = RF_thres[[1]],
+            aes(x = thrs, y = fb_measure, label = round(thrs,3)),
+            vjust = -1.5, hjust = 1) +
+  geom_text(data = RF_thres[[1]],
+            aes(x = thrs, y = fb_measure, label = round(fb_measure,3)),
+            vjust = -1.5, hjust = -0.2) +
+  geom_line(mapping = aes(x = Threshold, y = GB_F2_Score,
+                             color = "GB_F2_Score"), lwd = 1.5) +
+  geom_point(data = GB_thres[[1]],aes(x = thrs, y = fb_measure)) +
+  geom_segment(data = GB_thres[[1]],
+               aes(x = thrs, xend = thrs, y = fb_measure, yend = 0),
+               linetype = "dashed",lwd = 1) +
+  geom_text(data = GB_thres[[1]],
+            aes(x = thrs, y = fb_measure, label = round(thrs,3)),
+            vjust = -0.2, hjust = 1.2) +
+  geom_text(data = GB_thres[[1]],
+            aes(x = thrs, y = fb_measure, label = round(fb_measure,3)),
+            vjust = -0.2, hjust = 0) +
+  scale_color_manual(name = "Legend", values = c("Log_F2_Score" = "darkblue",
+                                                 "RF_F2_Score" = "red",
+                                                 "GB_F2_Score" = "black")) +
+  ylim(0,0.5) +
+  ggtitle("F2 Measure vs Threshold")  + ylab("F2 Measure")
+```
+
+
+Going back to the test data, it is now split into X_test and Y_test.
+```{r}
+X_test <- test_data[,-4]
+Y_test <- test_data[, 4]
+
+```
+
+Probabilities are being determined to allow for threshold optimization. 
+```{r}
+log_prob <- predict(Logistic_model,X_test,type = 'prob')
+RF_prob <- predict(RF_model2,X_test,type = 'prob')
+GB_prob <- predict(GB_Model2,X_test,type = 'prob')
+
+log_predic <- rep(0,length.out = nrow(X_test))
+RF_predic <- rep(0,length.out = nrow(X_test))
+GB_predic <- rep(0,length.out = nrow(X_test))
+
+for(i in 1:nrow(X_test)){
+  log_predic[i] <- ifelse(log_prob$Stroke[i] > Log_thres[[1]][1],'Stroke','No_Stroke')
+  RF_predic[i] <- ifelse(RF_prob$Stroke[i] > RF_thres[[1]][1],'Stroke','No_Stroke')
+  GB_predic[i] <- ifelse(GB_prob$Stroke[i] > GB_thres[[1]][1],'Stroke','No_Stroke')
+}
+
+
+
+```
+
+```{r}
+message("Logistic Model")
+ConfusionMatrix(log_predic,Y_test)
+FBeta_Score(Y_test,y_pred = log_predic,positive = "Stroke",2)
+
+message("Random Forest Model")
+ConfusionMatrix(RF_predic,Y_test)
+FBeta_Score(Y_test,y_pred = RF_predic,positive = "Stroke",2)
+
+message("Gradient Boosting Model")
+ConfusionMatrix(GB_predic,Y_test)
+FBeta_Score(Y_test,y_pred = GB_predic,positive = "Stroke",2)
+```
+
+
+The function evalm from MLevals can also be used to compare the final models created using CV.
+```{r}
+Model_Metrics <- evalm(list(Logistic_model, RF_model2, GB_Model2),
+                     gnames=c('Logistic','RF',"GB"),
+                     rlinethick=0.8,
+                     fsize=13,
+                     plots='pr',
+                     silent = TRUE,
+                     positive = 'Stroke',
+                     optimise = 'F1')
+
+```
+
+Although the models are not performing optimally, they do a good job at predicting a stroke. In this case FN have a large impact, where as a FP is common in the medical field. Our model is best thought as a way to catch at-risk patients
+
+
+## Extra Information
+
+It's possible to extract variable importance 
+```{r}
+#library(randomForestExplainer)
+summary(GB_Model2)
+#randomForestExplainer::explain_forest(RF_model2$finalModel)
+
+```
+Table output for Logistic Regression
+
+```{r}
+library(gtsummary)
+Logistic_model$finalModel %>%
+  tbl_regression(exponentiate = TRUE) %>%
+  add_glance_source_note() %>%
+  bold_labels()
+
+```
+
+
+Partial Dependence Plots for Logistic Regression
+```{r,fig.width= 10, fig.height=7}
+library(pdp)
+log_age <- partial(Logistic_model,
+                 pred.var = 'age',
+                 prob = TRUE)
+log_age$yhat <- 1 - log_age$yhat
+log_age$yhat <- prob_fix(log_age$yhat)
+
+log_AGL <- partial(Logistic_model,
+                 pred.var = 'avg_glucose_level',
+                 prob = TRUE)
+log_AGL$yhat <- 1 - log_AGL$yhat
+log_AGL$yhat <- prob_fix(log_AGL$yhat)
+
+
+log_age_hyp <- partial(Logistic_model,
+                    c('age','hypertension_1'),
+                    prob = TRUE)
+log_age_hyp$yhat <- 1 - log_age_hyp$yhat
+log_age_hyp$yhat <- prob_fix(log_age_hyp$yhat)
+
+log_age_smoke <- partial(Logistic_model,
+                    c('age','smoking_status_never_smoked'),
+                    prob = TRUE)
+log_age_smoke$yhat <- 1 - log_age_smoke$yhat
+log_age_smoke$yhat <- prob_fix(log_age_smoke$yhat)
+
+log_age_plot <- log_age %>%
+  autoplot(ylab = "F[Age]",lwd = 2) +
+  theme_light() +
+  ggtitle("Partial Dependence on Age")
+
+log_AGL_plot <- log_AGL %>%
+  autoplot(ylab = "F[AGL]",lwd = 2) +
+  theme_light() +
+  ggtitle("Partial Dependence on AGL")
+
+log_age_hyp_plot <- plotPartial(log_age_hyp,countour = TRUE)
+log_age_smoke_plot <- plotPartial(log_age_smoke,countour = TRUE)
+
+grid.arrange(log_age_plot, log_AGL_plot, log_age_hyp_plot,log_age_smoke_plot, ncol = 2, nrow = 2)
+```
+
+True best thresholds
+```{r}
+prob_fix(Log_thres[[1]][1])
+RF_thres[[1]][1]
+prob_fix(GB_thres[[1]][1])
+```
+
+```{r,fig.width= 10, fig.height=7,warning=FALSE}
+RF_age <- partial(RF_model2,
+                 pred.var = 'age',
+                 prob = TRUE)
+RF_age$yhat <- 1 - RF_age$yhat
+
+
+
+RF_age_hyp <- partial(RF_model2,
+                    c('age','gender_Male'),
+                    prob = TRUE)
+RF_age_hyp$yhat <- 1 - RF_age_hyp$yhat
+
+
+RF_age_smoke <- partial(RF_model2,
+                    c('age','smoking_status_never_smoked'),
+                    prob = TRUE)
+RF_age_smoke$yhat <- 1 - RF_age_smoke$yhat
+
+
+RF_age_plot <- RF_age %>%
+  autoplot(smooth = TRUE, ylab = "F[Age]",lwd = 2) +
+  theme_light() +
+  ggtitle("Partial Dependence on Age")
+
+RF_age_hyp_plot <- plotPartial(RF_age_hyp,countour = TRUE)
+RF_age_smoke_plot <- plotPartial(RF_age_smoke,countour = TRUE)
+
+grid.arrange(RF_age_plot, RF_age_hyp_plot,RF_age_smoke_plot, ncol = 2, nrow = 2)
+```
+
+```{r,fig.width= 10, fig.height=7,warning=FALSE}
+GB_age <- partial(GB_Model2,
+                 pred.var = 'age',
+                 prob = TRUE)
+GB_age$yhat <- 1 - GB_age$yhat
+
+
+
+GB_age_hyp <- partial(GB_Model2,
+                    c('age','hypertension_1'),
+                    prob = TRUE)
+GB_age_hyp$yhat <- 1 - GB_age_hyp$yhat
+
+
+GB_age_smoke <- partial(GB_Model2,
+                    c('age','Residence_type_Urban'),
+                    prob = TRUE)
+GB_age_smoke$yhat <- 1 - GB_age_smoke$yhat
+
+
+GB_age_plot <- GB_age %>%
+  autoplot(smooth = TRUE, ylab = "F[Age]",lwd = 2) +
+  theme_light() +
+  ggtitle("Partial Dependence on Age")
+
+GB_age_hyp_plot <- plotPartial(GB_age_hyp,countour = TRUE)
+GB_age_smoke_plot <- plotPartial(GB_age_smoke,countour = TRUE)
+
+grid.arrange(GB_age_plot, GB_age_hyp_plot,GB_age_smoke_plot, ncol = 2, nrow = 2)
+```
+
+```{r}
+percent(quantile(prob_fix(Logistic_model$pred$Stroke),
+         probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)))
+
+percent(quantile(GB_Model2$pred$Stroke,
+         probs = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)))
+```
+
+```{r}
+rel_inf <-summary(GB_Model2)
+rel_inf$rel.inf <- round(rel_inf$rel.inf)
+```
+
+
