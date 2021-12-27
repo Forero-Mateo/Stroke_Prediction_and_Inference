@@ -147,13 +147,13 @@ on heart disease.
 grid.arrange(nohyper_plot, hyper_plot)
 ```
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
 
 ``` r
 grid.arrange(noheartd_plot,heartd_plot)
 ```
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-10-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-10-1.png)<!-- -->
 
 ``` r
 grid.arrange(age_plot,gluc_plot,bmi_plot,ncol = 2,nrow = 2)
@@ -161,7 +161,7 @@ grid.arrange(age_plot,gluc_plot,bmi_plot,ncol = 2,nrow = 2)
 
     ## Warning: Removed 181 rows containing non-finite values (stat_boxplot).
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
 
 Next we will look at whether we see a difference in the categorical
 values and their average rate of stroke.
@@ -170,7 +170,7 @@ values and their average rate of stroke.
 grid.arrange(work_pie, res_pie, smoke_pie, married_pie,nrow = 2, ncol = 2)
 ```
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-15-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-15-1.png)<!-- -->
 
 # Model Pre-Processing
 
@@ -189,40 +189,12 @@ of the 5 simulations are used to give a value to our new data set.
 mice_result <- mice(adult_data,method = 'rf',seed = 575)
 ```
 
-    ## 
-    ##  iter imp variable
-    ##   1   1  bmi
-    ##   1   2  bmi
-    ##   1   3  bmi
-    ##   1   4  bmi
-    ##   1   5  bmi
-    ##   2   1  bmi
-    ##   2   2  bmi
-    ##   2   3  bmi
-    ##   2   4  bmi
-    ##   2   5  bmi
-    ##   3   1  bmi
-    ##   3   2  bmi
-    ##   3   3  bmi
-    ##   3   4  bmi
-    ##   3   5  bmi
-    ##   4   1  bmi
-    ##   4   2  bmi
-    ##   4   3  bmi
-    ##   4   4  bmi
-    ##   4   5  bmi
-    ##   5   1  bmi
-    ##   5   2  bmi
-    ##   5   3  bmi
-    ##   5   4  bmi
-    ##   5   5  bmi
-
 ``` r
 complete_data <- complete(mice_result)
 densityplot(mice_result)
 ```
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->
 
 I’ll now create dummy variables to represent the categorical data to
 preform a smote procedure later in our cross validation. Additionally
@@ -251,7 +223,8 @@ dummy_data <- dummy_data[ trainIndex,]
 test_data <- dummy_data[-trainIndex,]
 ```
 
-## Model 1: Logistic Regression using a Step AIC algorithm to find the best variables to use. A prelimiary model using the entire dataset will be used to determine which predictors are statistically relevant to our response then CV will be done with the chosen parameters.
+## Model 1: Logistic Regression
+A Step AIC algorithm is run to find the best variables to use. A prelimiary model using the entire dataset will be used to determine which predictors are statistically relevant to our response then CV will be done with the chosen parameters.
 
 ``` r
 smote_log_model_1 <- recipe(stroke~., data = dummy_data, seed = 575) %>%
@@ -627,7 +600,6 @@ Sys.time() - t
 grid.table(round(head(GB_Model$results[order(GB_Model$results$Kappa,decreasing = TRUE),]),3))
 ```
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-33-1.png)<!-- -->
 
 A final GB model will be created using the best tuning
 
@@ -662,24 +634,6 @@ Sys.time() - t
 
     ## Time difference of 17.07394 secs
 
-``` r
-summary(GB_Model2$finalModel)
-```
-
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-36-1.png)<!-- -->
-
-    ##                                                     var    rel.inf
-    ## age                                                 age 43.5698216
-    ## Residence_type_Urban               Residence_type_Urban 13.7472315
-    ## gender_Male                                 gender_Male 12.9065208
-    ## hypertension_1                           hypertension_1  9.4558783
-    ## smoking_status_never_smoked smoking_status_never_smoked  8.2655551
-    ## work_type_self_employed         work_type_self_employed  6.3555075
-    ## heart_disease_1                         heart_disease_1  2.8534949
-    ## smoking_status_Unknown           smoking_status_Unknown  2.5627799
-    ## ever_married_Yes                       ever_married_Yes  0.2832104
-    ## avg_glucose_level                     avg_glucose_level  0.0000000
-    ## bmi                                                 bmi  0.0000000
 
 ``` r
 confusionMatrix(GB_Model2,'none')
@@ -857,7 +811,7 @@ ggplot(data = Model_thres) +
   ggtitle("F2 Measure vs Threshold")  + ylab("F2 Measure")
 ```
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-40-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-40-1.png)<!-- -->
 
 Going back to the test data, it is now split into X_test and Y_test.
 
@@ -961,7 +915,7 @@ Model_Metrics <- evalm(list(Logistic_model, RF_model2, GB_Model2),
                      optimise = 'F1')
 ```
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-44-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-44-1.png)<!-- -->
 
 Although the models are not performing optimally, they do a good job at
 predicting a stroke. In this case FN have a large impact, where as a FP
@@ -976,8 +930,6 @@ It’s possible to extract variable importance
 #library(randomForestExplainer)
 summary(GB_Model2)
 ```
-
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-45-1.png)<!-- -->
 
     ##                                                     var    rel.inf
     ## age                                                 age 43.5698216
@@ -1434,12 +1386,6 @@ Partial Dependence Plots for Logistic Regression
 library(pdp)
 ```
 
-    ## 
-    ## Attaching package: 'pdp'
-
-    ## The following object is masked from 'package:purrr':
-    ## 
-    ##     partial
 
 ``` r
 log_age <- partial(Logistic_model,
@@ -1483,17 +1429,7 @@ log_age_smoke_plot <- plotPartial(log_age_smoke,countour = TRUE)
 grid.arrange(log_age_plot, log_AGL_plot, log_age_hyp_plot,log_age_smoke_plot, ncol = 2, nrow = 2)
 ```
 
-    ## Warning: Use of `object[[1L]]` is discouraged. Use `.data[[1L]]` instead.
-
-    ## Warning: Use of `object[["yhat"]]` is discouraged. Use `.data[["yhat"]]`
-    ## instead.
-
-    ## Warning: Use of `object[[1L]]` is discouraged. Use `.data[[1L]]` instead.
-
-    ## Warning: Use of `object[["yhat"]]` is discouraged. Use `.data[["yhat"]]`
-    ## instead.
-
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-47-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-47-1.png)<!-- -->
 
 True best thresholds
 
@@ -1551,7 +1487,7 @@ grid.arrange(RF_age_plot, RF_age_hyp_plot,RF_age_smoke_plot, ncol = 2, nrow = 2)
 
     ## `geom_smooth()` using method = 'loess'
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-49-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-49-1.png)<!-- -->
 
 ``` r
 GB_age <- partial(GB_Model2,
@@ -1586,7 +1522,7 @@ grid.arrange(GB_age_plot, GB_age_hyp_plot,GB_age_smoke_plot, ncol = 2, nrow = 2)
 
     ## `geom_smooth()` using method = 'loess'
 
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-50-1.png)<!-- -->
+![](Stroke_Data-Mining_files/figure-gfm/unnamed-chunk-50-1.png)<!-- -->
 
 ``` r
 percent(quantile(prob_fix(Logistic_model$pred$Stroke),
@@ -1608,10 +1544,4 @@ percent(quantile(GB_Model2$pred$Stroke,
 
 ``` r
 rel_inf <-summary(GB_Model2)
-```
-
-![](Project-Work-in-Progress_files/figure-gfm/unnamed-chunk-52-1.png)<!-- -->
-
-``` r
-rel_inf$rel.inf <- round(rel_inf$rel.inf)
 ```
