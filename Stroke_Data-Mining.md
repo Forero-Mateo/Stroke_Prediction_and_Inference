@@ -710,7 +710,7 @@ boost_Metrics$stdres
 
 This Function will determine what the best threshold for the models are
 when optimized by the F-Beta_Measure. In this particular case, I am most
-interested in F-2_Measure to add more important to recall to avoid false
+interested in F-2_Measure to add more importance to recall to avoid false
 negative as much as possible.
 
 ``` r
