@@ -7,4 +7,9 @@ This was a project for the graduate course Applied Data Mining and Analytics in 
 The goal of the project was to execute data exploration and model creation in the hope of building a risk measure compareable to the physician established CHADS-VAS Score. This tool uses age, biological gender, presence of congestive heart failure, hypertension, history of strokes, heart disease and diabetes to predict risk of stroke. Creating a model that uses similar variables in addition to adding social determinants of health such as marriage status, work type, and residence type may provide a better prediction than is currently being used.
 
 ### Techniques Used
+- Random Forest missing value imputations
+- Grid Search hyperparameter optimization
+- Logistic Model Step AIC parameter selection
+- Cross Validation for model optimization and metric comparison
+- Fold-only SMOTE  to balance the dataset response proportions and prevent data leakage
 - 
