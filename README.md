@@ -1,5 +1,7 @@
 # Graduate Data Mining: Stroke Prediction and Inference
-Project group only consisted of me [Mateo Forero]. To see code output, refer to the [.MD file](Stroke_Data-Mining.md).
+Project group only consisted of me [Mateo Forero]. The original project was done in R but a Python rendition was also created to show how each language can implement similar results. Aside from syntax, the biggest difference is that sklearn purposefully avoids statistical inference in models, so a different library was used for the logistic model. 
+
+To see code output, refer to the [.MD file](Stroke_Data-Mining.md).
 
 ## Project Overview
 This was a project for the graduate course Applied Data Mining and Analytics in Business. It uses the [Stroke Prediction Dataset](https://www.kaggle.com/fedesoriano/stroke-prediction-dataset) found on Kaggle. The dataset was adjusted to only include adults (Age >= 18) because the risk factors associated with stroke in adolescents and children, such as genetic bleeding disorders, are not captured by this dataset.
